@@ -1,55 +1,60 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime, timedelta
-import json
 import os
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from flask import Flask, request
+from supabase import create_client, Client
 
 # ========== ТОКЕН БОТА ==========
 TOKEN = "8700545809:AAH6FyZB7Hdv5l_-CpIiFzshct7SdlOPo_k"
 bot = telebot.TeleBot(TOKEN)
 
-# ========== АДМІНИ (з Render Environment Variables) ==========
+# ========== SUPABASE ==========
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("❌ Помилка: SUPABASE_URL та SUPABASE_KEY не задані в змінних оточення!")
+    supabase = None
+else:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ========== АДМІНИ (з Render) ==========
 ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if id.strip()]
 if not ADMIN_IDS:
     print("⚠️ Увага! Жодного адміна не налаштовано. Додайте змінну ADMIN_IDS.")
 
-# ========== ФАЙЛ НОВИН ==========
-NEWS_FILE = "news.json"
+# ========== ФУНКЦІЇ ДЛЯ РОБОТИ З НОВИНАМИ (Supabase) ==========
+def add_news_to_db(text):
+    if supabase is None:
+        return None
+    try:
+        result = supabase.table("news").insert({"text": text}).execute()
+        return result.data[0]["id"] if result.data else None
+    except Exception as e:
+        print(f"Помилка додавання новини: {e}")
+        return None
 
-def load_news():
-    if not os.path.exists(NEWS_FILE):
+def get_all_news_from_db():
+    if supabase is None:
         return []
-    with open(NEWS_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except:
-            return []
+    try:
+        result = supabase.table("news").select("id, text, created_at").order("created_at", desc=False).execute()
+        return result.data
+    except Exception as e:
+        print(f"Помилка отримання новин: {e}")
+        return []
 
-def save_news(news_list):
-    with open(NEWS_FILE, "w", encoding="utf-8") as f:
-        json.dump(news_list, f, ensure_ascii=False, indent=2)
-
-def add_news(text):
-    news = load_news()
-    new_id = max([n["id"] for n in news], default=0) + 1
-    news.append({
-        "id": new_id,
-        "text": text,
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M")
-    })
-    save_news(news)
-    return new_id
-
-def delete_news(news_id):
-    news = load_news()
-    new_list = [n for n in news if n["id"] != news_id]
-    if len(new_list) == len(news):
+def delete_news_from_db(news_id):
+    if supabase is None:
         return False
-    save_news(new_list)
-    return True
+    try:
+        result = supabase.table("news").delete().eq("id", news_id).execute()
+        return len(result.data) > 0
+    except Exception as e:
+        print(f"Помилка видалення новини: {e}")
+        return False
 
 # ========== ЧАС УРОКІВ ==========
 time_slots = {
@@ -63,7 +68,7 @@ time_slots = {
     8: "15:15-16:00"
 }
 
-# ========== РОЗКЛАД (скорочено для прикладу, але повний з вашого коду) ==========
+# ========== РОЗКЛАД (той самий, що й раніше) ==========
 schedule = {
     5: {
         1: ["англійська мова", "українська мова", "мистецтво", "математика", "фізична культура", "українська література"],
@@ -176,13 +181,15 @@ def show_schedule(chat_id, message_id, cls, day, is_edit=True):
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
 
 def show_news(chat_id, message_id, is_edit=True):
-    news_list = load_news()
+    news_list = get_all_news_from_db()
     if not news_list:
         text = "📰 <b>Новини</b>\n\n😔 Немає новин."
     else:
         text = "📰 <b>Новини</b>\n\n"
         for n in news_list:
-            text += f"🆔 <b>{n['id']}</b> | {n['date']}\n{n['text']}\n\n"
+            # Форматуємо дату
+            date_str = datetime.strptime(n['created_at'], "%Y-%m-%dT%H:%M:%S.%f%z").strftime("%Y-%m-%d %H:%M")
+            text += f"🆔 <b>{n['id']}</b> | {date_str}\n{n['text']}\n\n"
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔙 На головну", callback_data="main_menu"))
     if is_edit:
@@ -190,7 +197,7 @@ def show_news(chat_id, message_id, is_edit=True):
     else:
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
 
-# ========== АДМІН КОМАНДИ ==========
+# ========== АДМІН-КОМАНДИ ==========
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
@@ -203,8 +210,11 @@ def add_news_command(message):
     if not text:
         bot.reply_to(message, "✏️ Напишіть текст новини після команди: `/addnews Текст новини`", parse_mode="Markdown")
         return
-    new_id = add_news(text)
-    bot.reply_to(message, f"✅ Новину додано! ID: {new_id}")
+    new_id = add_news_to_db(text)
+    if new_id:
+        bot.reply_to(message, f"✅ Новину додано! ID: {new_id}")
+    else:
+        bot.reply_to(message, "❌ Помилка при додаванні новини в базу даних.")
 
 @bot.message_handler(commands=['deletenews'])
 def delete_news_command(message):
@@ -216,23 +226,24 @@ def delete_news_command(message):
         bot.reply_to(message, "❌ Використання: `/deletenews ID`", parse_mode="Markdown")
         return
     news_id = int(parts[1])
-    if delete_news(news_id):
+    if delete_news_from_db(news_id):
         bot.reply_to(message, f"🗑 Новину з ID {news_id} видалено.")
     else:
-        bot.reply_to(message, f"⚠️ Новину з ID {news_id} не знайдено.")
+        bot.reply_to(message, f"⚠️ Новину з ID {news_id} не знайдено або сталася помилка.")
 
 @bot.message_handler(commands=['listnews'])
 def list_news_command(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "❌ У вас немає прав адміністратора.")
         return
-    news = load_news()
+    news = get_all_news_from_db()
     if not news:
         bot.reply_to(message, "📭 Новини відсутні.")
         return
     text = "📋 <b>Список новин</b>\n\n"
     for n in news:
-        text += f"🆔 {n['id']} | {n['date']}\n{n['text']}\n\n"
+        date_str = datetime.strptime(n['created_at'], "%Y-%m-%dT%H:%M:%S.%f%z").strftime("%Y-%m-%d %H:%M")
+        text += f"🆔 {n['id']} | {date_str}\n{n['text']}\n\n"
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 # ========== ОСНОВНІ ОБРОБНИКИ ==========
@@ -311,48 +322,36 @@ def handle_callback(call):
         show_schedule(call.message.chat.id, call.message.message_id, cls, tomorrow_day, is_edit=True)
         return
 
-# ========== ФОН: ОПІВНІЧНЕ ОНОВЛЕННЯ ==========
-def midnight_updater():
-    while True:
-        now = datetime.now()
-        next_midnight = datetime(now.year, now.month, now.day) + timedelta(days=1)
-        seconds_to_sleep = (next_midnight - now).total_seconds()
-        time.sleep(seconds_to_sleep)
-        print("🕛 [MIDNIGHT] Оновлення дати – кеш скинуто (актуальний розклад)")
+# ========== FLASK + WEBHOOK ==========
+app = Flask(__name__)
 
-# ========== HTTP-СЕРВЕР ДЛЯ RENDER HEALTH CHECK ==========
-PORT = int(os.environ.get("PORT", 8000))
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_str = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+        return '', 200
+    return '', 403
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/health" or self.path == "/":
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
-        else:
-            self.send_response(404)
-            self.end_headers()
-    def log_message(self, format, *args):
-        # Не засмічуємо логи
-        pass
-
-def run_http_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"🌐 HTTP сервер запущено на порту {PORT} для health check")
-    server.serve_forever()
+@app.route('/health', methods=['GET'])
+def health():
+    return 'OK', 200
 
 # ========== ЗАПУСК ==========
-if __name__ == "__main__":
-    print("✅ Бот розкладу запущений!")
-    print("📋 Доступні класи: 5, 6, 7, 8, 9, 10, 11")
-    print("👑 Адміни:", ADMIN_IDS if ADMIN_IDS else "не налаштовано")
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8000))
     
-    # Запускаємо потік опівнічного оновлення
-    threading.Thread(target=midnight_updater, daemon=True).start()
+    # Встановлюємо вебхук (тільки якщо є зовнішня URL)
+    render_url = os.environ.get('RENDER_EXTERNAL_URL')
+    if render_url:
+        webhook_url = f"{render_url}/webhook"
+        bot.remove_webhook()
+        bot.set_webhook(url=webhook_url)
+        print(f"✅ Вебхук встановлено: {webhook_url}")
+    else:
+        print("⚠️ RENDER_EXTERNAL_URL не знайдено, вебхук не встановлено.")
     
-    # Запускаємо HTTP-сервер в окремому потоці
-    threading.Thread(target=run_http_server, daemon=True).start()
-    
-    # Основний потік – polling бота
-    print("🤖 Бот починає опитування...")
-    bot.infinity_polling()
+    print("✅ Бот запущено в режимі вебхука (Flask)")
+    print(f"🌐 Слухаємо на порту {port}")
+    app.run(host='0.0.0.0', port=port)
