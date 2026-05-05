@@ -6,6 +6,7 @@ import threading
 import time
 from flask import Flask, request
 from supabase import create_client, Client
+import json
 
 # ========== ТОКЕН БОТА ==========
 TOKEN = "8700545809:AAH6FyZB7Hdv5l_-CpIiFzshct7SdlOPo_k"
@@ -327,18 +328,32 @@ app = Flask(__name__)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_str = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_str)
-        bot.process_new_updates([update])
-        return '', 200
-    return '', 403
+    try:
+        if request.headers.get('content-type') == 'application/json':
+            # Отримуємо JSON як словник
+            data = request.get_json()
+            print(f"DEBUG: отримано update: {data.get('update_id')}")  # для логів
+            
+            # Створюємо об'єкт Update
+            update = telebot.types.Update.de_json(data)
+            if update:
+                bot.process_new_updates([update])
+                print("DEBUG: обробка успішна")
+            else:
+                print("DEBUG: не вдалося створити Update")
+            return '', 200
+        else:
+            print("DEBUG: невірний content-type")
+            return '', 403
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return '', 500
 
 @app.route('/health', methods=['GET'])
 def health():
     return 'OK', 200
 
-@app.route('/', methods=['GET'])
+@app.route('/')
 def index():
     return 'OK', 200
 
