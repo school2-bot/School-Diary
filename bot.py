@@ -5,12 +5,13 @@ import json
 import os
 import threading
 import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ========== ТОКЕН БОТА ==========
 TOKEN = "8700545809:AAH6FyZB7Hdv5l_-CpIiFzshct7SdlOPo_k"
 bot = telebot.TeleBot(TOKEN)
 
-# ========== АДМІНИ ==========
+# ========== АДМІНИ (з Render Environment Variables) ==========
 ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if id.strip()]
 if not ADMIN_IDS:
     print("⚠️ Увага! Жодного адміна не налаштовано. Додайте змінну ADMIN_IDS.")
@@ -62,7 +63,7 @@ time_slots = {
     8: "15:15-16:00"
 }
 
-# ========== ПОВНИЙ РОЗКЛАД ==========
+# ========== РОЗКЛАД (скорочено для прикладу, але повний з вашого коду) ==========
 schedule = {
     5: {
         1: ["англійська мова", "українська мова", "мистецтво", "математика", "фізична культура", "українська література"],
@@ -189,7 +190,7 @@ def show_news(chat_id, message_id, is_edit=True):
     else:
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
 
-# ========== АДМІН-КОМАНДИ ==========
+# ========== АДМІН КОМАНДИ ==========
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
@@ -234,7 +235,7 @@ def list_news_command(message):
         text += f"🆔 {n['id']} | {n['date']}\n{n['text']}\n\n"
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-# ========== ОБРОБНИКИ ==========
+# ========== ОСНОВНІ ОБРОБНИКИ ==========
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.send_message(
@@ -319,12 +320,39 @@ def midnight_updater():
         time.sleep(seconds_to_sleep)
         print("🕛 [MIDNIGHT] Оновлення дати – кеш скинуто (актуальний розклад)")
 
-threading.Thread(target=midnight_updater, daemon=True).start()
+# ========== HTTP-СЕРВЕР ДЛЯ RENDER HEALTH CHECK ==========
+PORT = int(os.environ.get("PORT", 8000))
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health" or self.path == "/":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        else:
+            self.send_response(404)
+            self.end_headers()
+    def log_message(self, format, *args):
+        # Не засмічуємо логи
+        pass
+
+def run_http_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    print(f"🌐 HTTP сервер запущено на порту {PORT} для health check")
+    server.serve_forever()
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
     print("✅ Бот розкладу запущений!")
     print("📋 Доступні класи: 5, 6, 7, 8, 9, 10, 11")
     print("👑 Адміни:", ADMIN_IDS if ADMIN_IDS else "не налаштовано")
-    print("🎯 Натисни Ctrl+C для зупинки")
+    
+    # Запускаємо потік опівнічного оновлення
+    threading.Thread(target=midnight_updater, daemon=True).start()
+    
+    # Запускаємо HTTP-сервер в окремому потоці
+    threading.Thread(target=run_http_server, daemon=True).start()
+    
+    # Основний потік – polling бота
+    print("🤖 Бот починає опитування...")
     bot.infinity_polling()
