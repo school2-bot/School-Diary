@@ -338,6 +338,10 @@ def webhook():
 def health():
     return 'OK', 200
 
+@app.route('/', methods=['GET'])
+def index():
+    return 'OK', 200
+
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
