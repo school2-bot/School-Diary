@@ -330,11 +330,11 @@ app = Flask(__name__)
 def webhook():
     try:
         if request.headers.get('content-type') == 'application/json':
-            # Отримуємо JSON як словник
+            # Отримуємо JSON як словник (dict), а не рядок
             data = request.get_json()
-            print(f"DEBUG: отримано update: {data.get('update_id')}")  # для логів
+            print(f"DEBUG: отримано update_id: {data.get('update_id')}")
             
-            # Створюємо об'єкт Update
+            # Правильне створення об'єкта Update
             update = telebot.types.Update.de_json(data)
             if update:
                 bot.process_new_updates([update])
@@ -342,11 +342,9 @@ def webhook():
             else:
                 print("DEBUG: не вдалося створити Update")
             return '', 200
-        else:
-            print("DEBUG: невірний content-type")
-            return '', 403
+        return '', 403
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"ERROR in webhook: {e}")
         return '', 500
 
 @app.route('/health', methods=['GET'])
