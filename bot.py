@@ -205,7 +205,6 @@ teachers_schedule = {
     }
 }
 
-# Сортуємо вчителів за алфавітом
 teachers_list = sorted(teachers_schedule.keys())
 
 # ========== РОЗКЛАД (той самий, що й раніше) ==========
@@ -304,7 +303,6 @@ def teachers_menu(page=0):
     """Створює меню з вчителями з пагінацією"""
     markup = InlineKeyboardMarkup(row_width=1)
     
-    # Показуємо по 8 вчителів на сторінку
     items_per_page = 8
     start_idx = page * items_per_page
     end_idx = min(start_idx + items_per_page, len(teachers_list))
@@ -313,7 +311,6 @@ def teachers_menu(page=0):
         teacher = teachers_list[i]
         markup.add(InlineKeyboardButton(teacher, callback_data=f"teacher_{i}"))
     
-    # Кнопки навігації
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"teachers_page_{page-1}"))
@@ -348,7 +345,6 @@ def show_schedule(chat_id, message_id, cls, day, is_edit=True):
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
 
 def show_teacher_schedule(chat_id, message_id, teacher_name, is_edit=True):
-    """Показує розклад конкретного вчителя"""
     schedule_data = teachers_schedule.get(teacher_name, {})
     
     if not schedule_data:
@@ -356,7 +352,7 @@ def show_teacher_schedule(chat_id, message_id, teacher_name, is_edit=True):
     else:
         text = f"👨‍🏫 <b>{teacher_name}</b>\n\n"
         
-        for day_num in [1, 2, 3, 4, 5]:  # Пн-Пт
+        for day_num in [1, 2, 3, 4, 5]:
             if day_num in schedule_data:
                 day_lessons = schedule_data[day_num]
                 text += f"{days_ua[day_num]}:\n"
@@ -386,7 +382,6 @@ def show_news(chat_id, message_id, is_edit=True):
     else:
         text = "📰 <b>Новини</b>\n\n"
         for n in news_list:
-            # Форматуємо дату
             date_str = datetime.strptime(n['created_at'], "%Y-%m-%dT%H:%M:%S.%f%z").strftime("%Y-%m-%d %H:%M")
             text += f"🆔 <b>{n['id']}</b> | {date_str}\n{n['text']}\n\n"
     markup = InlineKeyboardMarkup()
@@ -478,7 +473,137 @@ def help_command(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
+    # Головне меню
     if call.data == "main_menu":
         bot.edit_message_text(
             "🎓 <b>Оберіть розділ:</b>",
-            call.message.chat.id
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=main_menu()
+        )
+        return
+
+    # Новини
+    if call.data == "news":
+        show_news(call.message.chat.id, call.message.message_id, is_edit=True)
+        return
+
+    # Розклад вчителів (список)
+    if call.data == "teachers":
+        bot.edit_message_text(
+            "👨‍🏫 <b>Оберіть вчителя:</b>",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=teachers_menu(page=0)
+        )
+        return
+
+    # Пагінація вчителів
+    if call.data.startswith("teachers_page_"):
+        page = int(call.data.split("_")[2])
+        bot.edit_message_text(
+            "👨‍🏫 <b>Оберіть вчителя:</b>",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=teachers_menu(page)
+        )
+        return
+
+    # Конкретний вчитель
+    if call.data.startswith("teacher_"):
+        index = int(call.data.split("_")[1])
+        if 0 <= index < len(teachers_list):
+            teacher = teachers_list[index]
+            show_teacher_schedule(call.message.chat.id, call.message.message_id, teacher, is_edit=True)
+        else:
+            bot.answer_callback_query(call.id, "Вчителя не знайдено", show_alert=True)
+        return
+
+    # Клас
+    if call.data.startswith("class_"):
+        cls = int(call.data.split("_")[1])
+        bot.edit_message_text(
+            f"📚 <b>{cls} клас</b>\n\nОберіть день:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=day_menu(cls)
+        )
+        return
+
+    # День
+    if call.data.startswith("day_"):
+        _, cls, day = call.data.split("_")
+        cls, day = int(cls), int(day)
+        show_schedule(call.message.chat.id, call.message.message_id, cls, day, is_edit=True)
+        return
+
+    # Сьогодні
+    if call.data.startswith("today_"):
+        cls = int(call.data.split("_")[1])
+        day = get_current_day()
+        if day is None:
+            bot.answer_callback_query(call.id, "Сьогодні вихідний! Оберіть інший день.", show_alert=True)
+            return
+        show_schedule(call.message.chat.id, call.message.message_id, cls, day, is_edit=True)
+        return
+
+    # Завтра
+    if call.data.startswith("tomorrow_"):
+        cls = int(call.data.split("_")[1])
+        today_num = datetime.now().weekday()
+        if today_num >= 4:
+            bot.answer_callback_query(call.id, "Завтра вихідний! Оберіть інший день.", show_alert=True)
+            return
+        tomorrow_day = today_num + 2
+        show_schedule(call.message.chat.id, call.message.message_id, cls, tomorrow_day, is_edit=True)
+        return
+
+# ========== FLASK + WEBHOOK ==========
+app = Flask(__name__)
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        if request.headers.get('content-type') == 'application/json':
+            data = request.get_json()
+            print(f"DEBUG: отримано update_id: {data.get('update_id')}")
+            update = telebot.types.Update.de_json(data)
+            if update:
+                bot.process_new_updates([update])
+                print("DEBUG: обробка успішна")
+            else:
+                print("DEBUG: не вдалося створити Update")
+            return '', 200
+        return '', 403
+    except Exception as e:
+        print(f"ERROR in webhook: {e}")
+        return '', 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    return 'OK', 200
+
+@app.route('/')
+def index():
+    return 'OK', 200
+
+# ========== ЗАПУСК ==========
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8000))
+    
+    render_url = os.environ.get('RENDER_EXTERNAL_URL')
+    if render_url:
+        webhook_url = f"{render_url}/webhook"
+        bot.remove_webhook()
+        bot.set_webhook(url=webhook_url)
+        print(f"✅ Вебхук встановлено: {webhook_url}")
+    else:
+        print("⚠️ RENDER_EXTERNAL_URL не знайдено, вебхук не встановлено.")
+    
+    print("✅ Бот запущено в режимі вебхука (Flask)")
+    print(f"🌐 Слухаємо на порту {port}")
+    app.run(host='0.0.0.0', port=port)
