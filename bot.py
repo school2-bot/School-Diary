@@ -5,57 +5,16 @@ import os
 import threading
 import time
 from flask import Flask, request
-from supabase import create_client, Client
 import json
 
 # ========== ТОКЕН БОТА ==========
 TOKEN = "8700545809:AAH6FyZB7Hdv5l_-CpIiFzshct7SdlOPo_k"
 bot = telebot.TeleBot(TOKEN)
 
-# ========== SUPABASE ==========
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("❌ Помилка: SUPABASE_URL та SUPABASE_KEY не задані в змінних оточення!")
-    supabase = None
-else:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 # ========== АДМІНИ (з Render) ==========
 ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if id.strip()]
 if not ADMIN_IDS:
     print("⚠️ Увага! Жодного адміна не налаштовано. Додайте змінну ADMIN_IDS.")
-
-# ========== ФУНКЦІЇ ДЛЯ РОБОТИ З НОВИНАМИ (Supabase) ==========
-def add_news_to_db(text):
-    if supabase is None:
-        return None
-    try:
-        result = supabase.table("news").insert({"text": text}).execute()
-        return result.data[0]["id"] if result.data else None
-    except Exception as e:
-        print(f"Помилка додавання новини: {e}")
-        return None
-
-def get_all_news_from_db():
-    if supabase is None:
-        return []
-    try:
-        result = supabase.table("news").select("id, text, created_at").order("created_at", desc=False).execute()
-        return result.data
-    except Exception as e:
-        print(f"Помилка отримання новин: {e}")
-        return []
-
-def delete_news_from_db(news_id):
-    if supabase is None:
-        return False
-    try:
-        result = supabase.table("news").delete().eq("id", news_id).execute()
-        return len(result.data) > 0
-    except Exception as e:
-        print(f"Помилка видалення новини: {e}")
-        return False
 
 # ========== ЧАС УРОКІВ ==========
 time_slots = {
@@ -207,7 +166,7 @@ teachers_schedule = {
 
 teachers_list = sorted(teachers_schedule.keys())
 
-# ========== РОЗКЛАД (той самий, що й раніше) ==========
+# ========== РОЗКЛАД ==========
 schedule = {
     5: {
         1: ["англійська мова", "українська мова", "мистецтво", "математика", "фізична культура", "українська література"],
@@ -280,7 +239,6 @@ def main_menu():
     buttons = [InlineKeyboardButton(f"{cls} клас", callback_data=f"class_{cls}") for cls in [5,6,7,8,9,10,11]]
     markup.add(*buttons)
     markup.add(InlineKeyboardButton("👨‍🏫 Розклад вчителів", callback_data="teachers"))
-    markup.add(InlineKeyboardButton("📰 Новини", callback_data="news"))
     return markup
 
 def day_menu(cls):
@@ -375,71 +333,6 @@ def show_teacher_schedule(chat_id, message_id, teacher_name, is_edit=True):
     else:
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
 
-def show_news(chat_id, message_id, is_edit=True):
-    news_list = get_all_news_from_db()
-    if not news_list:
-        text = "📰 <b>Новини</b>\n\n😔 Немає новин."
-    else:
-        text = "📰 <b>Новини</b>\n\n"
-        for n in news_list:
-            date_str = datetime.strptime(n['created_at'], "%Y-%m-%dT%H:%M:%S.%f%z").strftime("%Y-%m-%d %H:%M")
-            text += f"🆔 <b>{n['id']}</b> | {date_str}\n{n['text']}\n\n"
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🔙 На головну", callback_data="main_menu"))
-    if is_edit:
-        bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
-    else:
-        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
-
-# ========== АДМІН-КОМАНДИ ==========
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
-
-@bot.message_handler(commands=['addnews'])
-def add_news_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ У вас немає прав адміністратора.")
-        return
-    text = message.text.replace('/addnews', '', 1).strip()
-    if not text:
-        bot.reply_to(message, "✏️ Напишіть текст новини після команди: `/addnews Текст новини`", parse_mode="Markdown")
-        return
-    new_id = add_news_to_db(text)
-    if new_id:
-        bot.reply_to(message, f"✅ Новину додано! ID: {new_id}")
-    else:
-        bot.reply_to(message, "❌ Помилка при додаванні новини в базу даних.")
-
-@bot.message_handler(commands=['deletenews'])
-def delete_news_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ У вас немає прав адміністратора.")
-        return
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        bot.reply_to(message, "❌ Використання: `/deletenews ID`", parse_mode="Markdown")
-        return
-    news_id = int(parts[1])
-    if delete_news_from_db(news_id):
-        bot.reply_to(message, f"🗑 Новину з ID {news_id} видалено.")
-    else:
-        bot.reply_to(message, f"⚠️ Новину з ID {news_id} не знайдено або сталася помилка.")
-
-@bot.message_handler(commands=['listnews'])
-def list_news_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ У вас немає прав адміністратора.")
-        return
-    news = get_all_news_from_db()
-    if not news:
-        bot.reply_to(message, "📭 Новини відсутні.")
-        return
-    text = "📋 <b>Список новин</b>\n\n"
-    for n in news:
-        date_str = datetime.strptime(n['created_at'], "%Y-%m-%dT%H:%M:%S.%f%z").strftime("%Y-%m-%d %H:%M")
-        text += f"🆔 {n['id']} | {date_str}\n{n['text']}\n\n"
-    bot.send_message(message.chat.id, text, parse_mode="HTML")
-
 # ========== ОСНОВНІ ОБРОБНИКИ ==========
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -465,8 +358,7 @@ def help_command(message):
         "⚡ <b>Швидкі кнопки:</b>\n"
         "• <b>Сьогодні</b> - розклад на поточний день\n"
         "• <b>Завтра</b> - розклад на наступний день\n\n"
-        "👨‍🏫 <b>Розклад вчителів</b> – перегляд розкладу викладачів\n"
-        "📰 <b>Новини</b> – останні повідомлення адміністрації\n\n"
+        "👨‍🏫 <b>Розклад вчителів</b> – перегляд розкладу викладачів\n\n"
         "🔄 Для повернення натисніть 'На головну'",
         parse_mode="HTML"
     )
@@ -482,11 +374,6 @@ def handle_callback(call):
             parse_mode="HTML",
             reply_markup=main_menu()
         )
-        return
-
-    # Новини
-    if call.data == "news":
-        show_news(call.message.chat.id, call.message.message_id, is_edit=True)
         return
 
     # Розклад вчителів (список)
